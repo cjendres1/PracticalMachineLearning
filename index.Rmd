@@ -1,0 +1,117 @@
+---
+title : Practical Machine Learning Course Project 
+output: html_document
+---
+
+The goal of this project is to develop a prediction model to determine the class of human activity. The five activity categories are A: sitting, B: sitting down,  C: standing, D: standing up, E: walking.
+Model training will be based on data from the DLA human activity recognition data set:
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H.
+<http://groupware.les.inf.puc-rio.br/work.jsf?p1=10335>
+
+## Load libraries and data
+
+```{r loading, echo = T, message = F, warning = F, tidy = F}
+library(AppliedPredictiveModeling)
+library(caret)
+library(rpart)
+library(randomForest)
+library(kernlab)
+library(rattle)
+library(RCurl)
+options(RCurlOptions = list(cainfo = system.file("CurlSSL", "cacert.pem", package = "RCurl")))
+
+trainingDataURL <- getURL('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv')
+testingDataURL  <- getURL('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv')
+training <- read.csv(text=trainingDataURL,header=TRUE)
+testing  <- read.csv(text=testingDataURL, header=TRUE)
+```
+
+There is a large number of variables. To make it easier to train a prediction algorithm, lets reduce the variable set.
+
+```{r reduce_variable_set, echo=TRUE}
+spaces <- colSums(training=='') # This will also be used to filter NA's
+saved_columns <- spaces[which(spaces == 0)]
+#Upon inspection of data, decide we don't need first 7 columns
+saved_columns <- saved_columns[8:length(saved_columns)]
+
+training_subset <- training[, which(names(training) %in% names(saved_columns))]
+testing_subset <- testing[, which(names(testing) %in% names(saved_columns))]
+
+#Now let's look at correlations to reduce the data set further
+#Will use a correlation threshold of 0.95. If any two variables show a higher correlation then we will exclude one of the variables
+ncols <- ncol(training_subset)
+Mnumer <- abs(cor(training_subset[1:ncols-1])); diag(Mnumer) <- 0
+corrindex <- which(Mnumer > 0.95, arr.ind=T)
+comparecorr <- corrindex[corrindex[,1] > corrindex[,2],] ## Only want the names of the high index field
+excludedfields <- unique(attributes(comparecorr)$dimnames[[1]])
+paste(c("Fields excluded due to high correlation are :", excludedfields),collapse=' ')
+training_subset <- training_subset[, -which(names(training_subset) %in% excludedfields)]
+names(training_subset) #Let's list our variable set
+```
+
+## Split data into training and testing sets
+
+```{r data_split, echo=TRUE}
+set.seed(408)
+inTrain <- createDataPartition(y=training_subset[[1]], p=0.6, list=FALSE)
+real_training <- training_subset[inTrain,] # Use a 60/40 split
+real_testing <- training_subset[-inTrain,]
+paste(c("The training set has", dim(real_training)[1], "samples, and", dim(real_training)[2], "variables"),collapse=' ')
+paste(c("The testing set has", dim(real_testing)[1], "samples, and", dim(real_training)[2], "variables"),collapse=' ')
+```
+
+## Train the prediction model using a classification tree
+
+```{r classtree}
+treeFit <- train(classe ~.,data=real_training, preProcess=c("center","scale"), method="rpart")
+print(treeFit$finalModel, digits=3)
+treepredict <- predict(treeFit, newdata=real_testing)
+print(confusionMatrix(treepredict, real_testing$classe),digits=3)
+```
+
+With an accuracy of around 52%, the tree model did not provide an acceptable prediction.
+Let's try a randomForest model. Based on comments in the course discussion, this seems to
+the favored model. We shall see. Here, we will also explore the use of cross validation in
+the training model using K = 2,4,8
+
+```{r random_forest}
+rfFit2 <- train(classe ~.,data=real_training, method="rf", 
+                preProcess=c("center","scale"),trControl=trainControl(method = "cv", number = 2))
+rfpredict2 <- predict(rfFit2, newdata=real_testing)
+print("Random Forest model with 2-fold cross validation")
+print(confusionMatrix(rfpredict2, real_testing$classe), digits=4)
+
+rfFit4 <- train(classe ~.,data=real_training, method="rf", 
+                preProcess=c("center","scale"),trControl=trainControl(method = "cv", number = 4))
+rfpredict4 <- predict(rfFit4, newdata=real_testing)
+print("Random Forest model with 4-fold cross validation")
+print(confusionMatrix(rfpredict4,real_testing$classe), digits=4)
+
+rfFit8 <- train(classe ~.,data=real_training, method="rf",
+                preProcess=c("center","scale"),trControl=trainControl(method = "cv", number = 8))
+print("Random Forest model with 8-fold cross validation")
+rfpredict8 <- predict(rfFit8, newdata=real_testing)
+print(confusionMatrix(rfpredict8, real_testing$classe), digits=4)
+```
+
+#### Comments on cross-validation
+
+The results show that the randomForest model is a very accurate predictor. Given that the prediction was
+already highly accurate, the effects of cross validation were minor. The optimal accuracy was obtained
+with 4-fold ( i.e. K=4) cross validation. However, the accuracy in all cases (K = 2, 4, or 8) was better than 99.1%
+
+Finally, we will look at the predictions for the 20 sample test set. Note: per the course instructions, as well as the Coursera Honor Code, the answers will not be shown. I will show the code for obtaining the predictions.
+
+
+```{r sample20predictions}
+smtreepredict <- as.character(predict(treeFit, newdata=testing_subset))
+smrf2predict  <- as.character(predict(rfFit2, newdata=testing_subset))
+smrf4predict  <- as.character(predict(rfFit4, newdata=testing_subset))
+smrf8predict  <- as.character(predict(rfFit8, newdata=testing_subset))
+predictDF <- rbind(smtreepredict,smrf2predict,smrf4predict,smrf8predict)
+```
+
+#### Comments on the predictions for the 20 sample test set. 
+
+Examination of the output (predictDF) from the preceding code showed that the random forest model (for any K-fold cross-validation) gave the same prediction values which were all scored as correct. The original classification tree model only scored 4 out of 20 correct.
+
